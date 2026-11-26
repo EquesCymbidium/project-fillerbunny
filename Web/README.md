@@ -15,10 +15,10 @@ Open `http://127.0.0.1:8000`. The app needs `Product\Blackbox\dispatcher.py`; `L
 
 ## Public deployment (free tiers)
 
-1. Put the **project root contents** in a GitHub repository. The website workflow assumes `Web` and `.github` are at the repository root.
-2. In GitHub, enable **Settings → Pages → Build and deployment → GitHub Actions**. The workflow publishes `Web` as a static site.
-3. Create a Render web service from the same GitHub repository using the root `render.yaml` Blueprint. Select the free instance plan. The service sleeps when idle on free tiers; its first request after sleeping can take a minute. Generated downloads are temporary and expire after one hour.
-4. Open the Render service URL, confirm `/health` returns `{"status":"ok"}`, then open the GitHub Pages site. Under **Generator connection**, enter the Render service URL and save it. The URL is kept only in that browser.
+1. In GitHub, set **Settings → Pages → Build and deployment → Deploy from a branch**, select `gh-pages` and `/ (root)`.
+2. Create a Render web service from the repository using the root `render.yaml` Blueprint. Select the free instance plan. The service sleeps after 15 minutes idle; its first request after sleeping can take about a minute. Generated downloads are temporary and expire after one hour.
+3. Open the Render service URL, confirm `/health` returns `{"status":"ok"}`, then open the GitHub Pages site. Under **Generator connection**, enter the Render service URL and save it. The URL is kept only in that browser.
+4. To update the Pages site after changing `Web`, run `git subtree push --prefix Web origin gh-pages`.
 5. To restrict browser access, set the Render environment variable `CORS_ORIGINS` to the exact GitHub Pages origin (for example `https://OWNER.github.io`). CORS is not authentication; this generator is public and rate-limited to five generation requests per client IP per minute.
 
 The free hosting provider and GitHub Pages are separate: Pages hosts the interface; Render runs Python generation. Do not put credentials in the front end.
