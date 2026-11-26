@@ -1,6 +1,6 @@
 # Fillerbunny web generator
 
-The site accepts an animation prompt and provides a `.pptx` scene deck plus an `.mp4` preview. It reuses the project's rule-based prompt parser. The public generator is cloud-compatible: PowerPoint COM and local Ollama are not used. Entities are rendered as labeled shapes rather than the original icon artwork. The PowerPoint file contains a slide snapshot after each action; the MP4 visualizes the actions. Native PowerPoint animation fidelity is not preserved. A short built-in entity list keeps common prompts working without publishing the project's icon artwork; the full local icon directory still expands entity recognition on the original project.
+The site accepts an animation prompt and provides a `.pptx` scene deck plus an `.mp4` preview. It reuses the project's rule-based prompt parser. The public generator is cloud-compatible: PowerPoint COM and local Ollama are not used. White slides and video frames use the project's fox and dog silhouettes; other entities are rendered as labeled shapes. The PowerPoint file contains a slide snapshot after each action; the MP4 visualizes the actions. Native PowerPoint animation fidelity is not preserved. A short built-in entity list keeps common prompts working without publishing the full icon library.
 
 ## Run locally
 
