@@ -16,7 +16,7 @@ Open `http://127.0.0.1:8000`. The app needs `Product\Blackbox\dispatcher.py`; `L
 ## Public deployment (free tiers)
 
 1. In GitHub, set **Settings → Pages → Build and deployment → Deploy from a branch**, select `gh-pages` and `/ (root)`.
-2. Create a Render web service from the repository using the root `render.yaml` Blueprint. Select the free instance plan. The service sleeps after 15 minutes idle; its first request after sleeping can take about a minute. Generated downloads are temporary and expire after one hour.
+2. Create a Render web service from the repository using the root `render.yaml` Blueprint. Select the free instance plan. The service sleeps after 15 minutes idle; its first request after sleeping can take about a minute. Generated downloads are kept for up to one hour, but Render's free ephemeral filesystem can clear them sooner when the service sleeps or restarts.
 3. Open the Render service URL, confirm `/health` returns `{"status":"ok"}`, then open the GitHub Pages site. Under **Generator connection**, enter the Render service URL and save it. The URL is kept only in that browser.
 4. To update the Pages site after changing `Web`, run `git subtree push --prefix Web origin gh-pages`.
 5. To restrict browser access, set the Render environment variable `CORS_ORIGINS` to the exact GitHub Pages origin (for example `https://OWNER.github.io`). CORS is not authentication; this generator is public and rate-limited to five generation requests per client IP per minute.
