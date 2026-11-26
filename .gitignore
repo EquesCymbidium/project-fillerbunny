@@ -1,0 +1,10 @@
+.venv/
+.venv*/
+.pytest_cache/
+**/__pycache__/
+.prompts/
+Product/Output/
+Product/Scripts/
+*.pptx
+*.pptm
+*.mp4
