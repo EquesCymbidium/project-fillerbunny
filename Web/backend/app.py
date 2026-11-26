@@ -23,11 +23,10 @@ log = logging.getLogger("fillerbunny.web")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "Product" / "Blackbox"))
-from dispatcher import parse_prompt  # noqa: E402
+from dispatcher import MAX_ACTIONS, MAX_PROMPT_LENGTH, parse_prompt  # noqa: E402
 
 JOB_ROOT = Path(tempfile.gettempdir()) / "fillerbunny-web-jobs"
 JOB_TTL_SECONDS = 60 * 60
-MAX_ACTIONS = 10
 REQUESTS_PER_MINUTE = 5
 _request_times: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = threading.Lock()
@@ -44,7 +43,7 @@ app.add_middleware(
 
 
 class GenerateRequest(BaseModel):
-    prompt: str = Field(min_length=5, max_length=2000)
+    prompt: str = Field(min_length=5, max_length=MAX_PROMPT_LENGTH)
 
 
 def _check_rate_limit(client_id: str) -> None:

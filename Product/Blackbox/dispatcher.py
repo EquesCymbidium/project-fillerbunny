@@ -57,6 +57,8 @@ _ICON_DIR = os.path.join(_PROJECT_ROOT, "Library", "Icons")
 TRIGGER_FIRST = "msoAnimTriggerOnPageClick"
 TRIGGER_NEXT = "msoAnimTriggerAfterPrevious"
 EFFECT_DURATION = 1.0
+MAX_PROMPT_LENGTH = 2000
+MAX_ACTIONS = 10
 
 # Colour word -> (R, G, B). Add a line to support a new colour.
 COLOR_RGB = {
@@ -369,6 +371,12 @@ def _extended_parse(prompt: str) -> list:
             action["exit"] = True
         elif kind == "spin":
             action["effect"] = "msoAnimEffectSpin"
+            degrees = _DEGREES_RE.search(tail)
+            if degrees:
+                amount = float(degrees.group(1))
+                action["amount"] = int(amount) if amount.is_integer() else amount
+                if _COUNTERCLOCKWISE_RE.search(tail):
+                    action["amount"] = -action["amount"]
         elif kind == "turn":
             color = next((word for word in _TOKEN_RE.findall(tail.lower())
                           if word in COLOR_RGB), None)
