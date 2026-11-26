@@ -1,6 +1,8 @@
+import io
 import math
 import logging
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -15,9 +17,11 @@ from pptx.util import Inches, Pt
 log = logging.getLogger(__name__)
 WIDTH, HEIGHT = 960, 540
 FPS = 10
-BACKGROUND = (13, 19, 34)
-ACCENT = (100, 220, 184)
+BACKGROUND = (255, 255, 255)
 ENTITY_SIZE = (116, 84)
+ICON_SIZE = (144, 144)
+ICON_DIR = Path(__file__).resolve().parents[1] / "assets" / "icons"
+ICON_FILES = {"fox": "Fox.png", "dog": "Dog.png"}
 ENTITY_COLORS = {
     "red": (204, 0, 0),
     "orange": (255, 140, 0),
@@ -27,7 +31,7 @@ ENTITY_COLORS = {
     "purple": (128, 0, 160),
     "pink": (255, 105, 180),
     "brown": (139, 69, 19),
-    "black": (40, 45, 54),
+    "black": (0, 0, 0),
     "white": (225, 230, 238),
     "gray": (128, 128, 128),
     "grey": (128, 128, 128),
@@ -61,15 +65,44 @@ DESTINATIONS = {
 }
 
 
+@lru_cache(maxsize=len(ICON_FILES))
+def _load_icon(name: str) -> Image.Image | None:
+    filename = ICON_FILES.get(name)
+    if filename is None:
+        return None
+    path = ICON_DIR / filename
+    if not path.is_file():
+        log.warning("Icon artwork is missing: %s", path)
+        return None
+    with Image.open(path) as icon:
+        return icon.convert("RGBA")
+
+
+def _tinted_icon(name: str, color: tuple[int, int, int]) -> io.BytesIO | None:
+    icon = _load_icon(name)
+    if icon is None:
+        return None
+    tinted = Image.new("RGBA", icon.size, (*color, 255))
+    tinted.putalpha(icon.getchannel("A"))
+    output = io.BytesIO()
+    tinted.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
 def _initial_states(actions: list[dict]) -> dict[str, dict]:
     states = {}
     for action in actions:
         for name in (action["shape"], *action.get("related_shapes", [])):
             if name in states:
                 continue
+            has_icon = _load_icon(name) is not None
             states[name] = {
-                "color": ENTITY_COLORS.get(action.get("color"), (59, 130, 246)),
+                "color": ENTITY_COLORS.get(
+                    action.get("color"), (0, 0, 0) if has_icon else (59, 130, 246)
+                ),
                 "shape_type": action.get("shape_type", ""),
+                "has_icon": has_icon,
                 "position": action.get("position"),
                 "x": 0.28 + (len(states) % 3) * 0.22,
                 "y": 0.52,
@@ -102,27 +135,42 @@ def _draw_entity(
     if alpha <= 0:
         return
     overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    left = int(x * WIDTH - ENTITY_SIZE[0] / 2)
-    top = int(y * HEIGHT - ENTITY_SIZE[1] / 2)
-    right, bottom = left + ENTITY_SIZE[0], top + ENTITY_SIZE[1]
-    color = (*(color or state["color"]), alpha)
-    shape_type = state.get("shape_type")
-    if shape_type == "msoShapeOval":
-        draw.ellipse((left, top, right, bottom), fill=color)
-    elif shape_type == "msoShapeIsoscelesTriangle":
-        draw.polygon(((left + ENTITY_SIZE[0] // 2, top), (right, bottom), (left, bottom)), fill=color)
-    elif shape_type == "msoShapeDiamond":
-        draw.polygon(((left + ENTITY_SIZE[0] // 2, top), (right, top + ENTITY_SIZE[1] // 2),
-                      (left + ENTITY_SIZE[0] // 2, bottom), (left, top + ENTITY_SIZE[1] // 2)), fill=color)
+    icon = _load_icon(name) if state.get("has_icon") else None
+    current_color = color or state["color"]
+    if icon is not None:
+        icon = icon.resize(ICON_SIZE, Image.Resampling.LANCZOS)
+        mask = icon.getchannel("A").point(lambda value: value * alpha // 255)
+        icon = Image.new("RGBA", ICON_SIZE, (*current_color, 255))
+        icon.putalpha(mask)
+        icon_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        icon_layer.alpha_composite(
+            icon,
+            (round(x * WIDTH - ICON_SIZE[0] / 2), round(y * HEIGHT - ICON_SIZE[1] / 2)),
+        )
+        overlay.alpha_composite(icon_layer)
     else:
-        draw.rounded_rectangle((left, top, right, bottom), radius=18, fill=color)
+        draw = ImageDraw.Draw(overlay)
+        left = int(x * WIDTH - ENTITY_SIZE[0] / 2)
+        top = int(y * HEIGHT - ENTITY_SIZE[1] / 2)
+        right, bottom = left + ENTITY_SIZE[0], top + ENTITY_SIZE[1]
+        fill = (*current_color, alpha)
+        shape_type = state.get("shape_type")
+        if shape_type == "msoShapeOval":
+            draw.ellipse((left, top, right, bottom), fill=fill)
+        elif shape_type == "msoShapeIsoscelesTriangle":
+            draw.polygon(((left + ENTITY_SIZE[0] // 2, top), (right, bottom), (left, bottom)), fill=fill)
+        elif shape_type == "msoShapeDiamond":
+            draw.polygon(((left + ENTITY_SIZE[0] // 2, top), (right, top + ENTITY_SIZE[1] // 2),
+                          (left + ENTITY_SIZE[0] // 2, bottom), (left, top + ENTITY_SIZE[1] // 2)), fill=fill)
+        else:
+            draw.rounded_rectangle((left, top, right, bottom), radius=18, fill=fill)
 
-    label = name.replace("_", " ")
-    bounds = draw.textbbox((0, 0), label, font=_font(18))
-    label_x = left + (ENTITY_SIZE[0] - bounds[2] + bounds[0]) // 2
-    label_y = top + (ENTITY_SIZE[1] - bounds[3] + bounds[1]) // 2
-    draw.text((label_x, label_y), label, font=_font(18), fill=(255, 255, 255, alpha))
+        label = name.replace("_", " ")
+        bounds = draw.textbbox((0, 0), label, font=_font(18))
+        label_x = left + (ENTITY_SIZE[0] - bounds[2] + bounds[0]) // 2
+        label_y = top + (ENTITY_SIZE[1] - bounds[3] + bounds[1]) // 2
+        draw.text((label_x, label_y), label, font=_font(18), fill=(255, 255, 255, alpha))
+
     if rotation:
         overlay = overlay.rotate(rotation, resample=Image.Resampling.BICUBIC)
     image.alpha_composite(overlay)
@@ -131,18 +179,6 @@ def _draw_entity(
 def _render_frame(states: dict, step: int, total: int, action: dict,
                   active: dict | None = None) -> Image.Image:
     image = Image.new("RGBA", (WIDTH, HEIGHT), BACKGROUND + (255,))
-    draw = ImageDraw.Draw(image)
-    draw.text((40, 30), "FILLERBUNNY  /  ANIMATION PREVIEW",
-              font=_font(16), fill=ACCENT)
-    draw.text((40, 68), f"STEP {step:02d}  /  {total:02d}",
-              font=_font(24), fill=(245, 247, 250))
-    effect = action.get("effect", "").replace("msoAnimEffect", "").lower()
-    detail = f"{action['shape'].replace('_', ' ')}  ·  {effect}"
-    draw.text((40, 106), detail, font=_font(17), fill=(174, 188, 205))
-    draw.line((40, 145, WIDTH - 40, 145), fill=(41, 54, 75), width=2)
-    draw.rectangle((40, HEIGHT - 48, WIDTH - 40, HEIGHT - 46), fill=(41, 54, 75))
-    progress = int((WIDTH - 80) * step / max(total, 1))
-    draw.rectangle((40, HEIGHT - 48, 40 + progress, HEIGHT - 46), fill=ACCENT)
 
     for name, state in states.items():
         motion = active.get(name) if active else None
@@ -165,23 +201,17 @@ def _add_pptx_slide(presentation: Presentation, states: dict, step: int,
     background.solid()
     background.fore_color.rgb = _pptx_color(BACKGROUND)
 
-    title = slide.shapes.add_textbox(Inches(0.55), Inches(0.28), Inches(12.2), Inches(0.45))
-    paragraph = title.text_frame.paragraphs[0]
-    paragraph.text = "FILLERBUNNY  /  ANIMATION PREVIEW"
-    paragraph.font.size = Pt(13)
-    paragraph.font.bold = True
-    paragraph.font.color.rgb = _pptx_color(ACCENT)
-
-    heading = slide.shapes.add_textbox(Inches(0.55), Inches(0.78), Inches(12.2), Inches(0.55))
-    paragraph = heading.text_frame.paragraphs[0]
-    paragraph.text = f"STEP {step:02d} / {total:02d}   {action['shape'].replace('_', ' ')}"
-    paragraph.font.size = Pt(24)
-    paragraph.font.bold = True
-    paragraph.font.color.rgb = _pptx_color((245, 247, 250))
-
     for name, state in states.items():
         if not state["visible"]:
             continue
+        if state.get("has_icon"):
+            icon = _tinted_icon(name, state["color"])
+            if icon is not None:
+                width, height = Inches(1.7), Inches(1.7)
+                left = Inches(0.3 + state["x"] * 12.5) - width / 2
+                top = Inches(1.45 + state["y"] * 4.7) - height / 2
+                slide.shapes.add_picture(icon, left, top, width, height)
+                continue
         width, height = Inches(1.7), Inches(1.25)
         left = Inches(0.3 + state["x"] * 12.5) - width / 2
         top = Inches(1.45 + state["y"] * 4.7) - height / 2
@@ -199,11 +229,6 @@ def _add_pptx_slide(presentation: Presentation, states: dict, step: int,
         frame.paragraphs[0].text = name.replace("_", " ")
         frame.paragraphs[0].font.size = Pt(16)
         frame.paragraphs[0].font.color.rgb = _pptx_color((255, 255, 255))
-
-    footer = slide.shapes.add_textbox(Inches(0.55), Inches(6.95), Inches(12.2), Inches(0.25))
-    footer.text_frame.paragraphs[0].text = "Static slide snapshots · animation effects are shown in the MP4 preview"
-    footer.text_frame.paragraphs[0].font.size = Pt(10)
-    footer.text_frame.paragraphs[0].font.color.rgb = _pptx_color((174, 188, 205))
 
 
 def _apply_action(state: dict, action: dict) -> None:

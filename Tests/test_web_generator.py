@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,8 +30,8 @@ class WebGeneratorTests(unittest.TestCase):
         self.assertEqual(actions[0]["related_shapes"], ["dog"])
 
     def test_creates_pptx_and_mp4_for_supported_prompt(self):
-        actions = parse_prompt("A red fox appears, then spins 180 degrees.")
-        self.assertEqual(len(actions), 2)
+        actions = parse_prompt("the fox jumps over the dog")
+        self.assertEqual(len(actions), 1)
 
         with tempfile.TemporaryDirectory() as directory:
             pptx_path = Path(directory) / "presentation.pptx"
@@ -38,7 +39,14 @@ class WebGeneratorTests(unittest.TestCase):
             create_outputs(actions, pptx_path, mp4_path)
 
             self.assertGreater(pptx_path.stat().st_size, 0)
-            self.assertEqual(len(Presentation(pptx_path).slides), len(actions))
+            slides = Presentation(pptx_path).slides
+            self.assertEqual(len(slides), len(actions))
+            pictures = [
+                shape for shape in slides[0].shapes
+                if shape.shape_type == MSO_SHAPE_TYPE.PICTURE
+            ]
+            self.assertEqual(len(pictures), 2)
+            self.assertEqual(slides[0].background.fill.fore_color.rgb, (255, 255, 255))
             self.assertGreater(mp4_path.stat().st_size, 0)
             with mp4_path.open("rb") as video:
                 header = video.read(12)
