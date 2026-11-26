@@ -18,10 +18,59 @@ sys.path.insert(0, str(PROJECT_ROOT / "Product" / "Blackbox"))
 
 from dispatcher import parse_prompt
 import dispatcher
-from Web.backend.generator import create_outputs
+from Web.backend.app import OUTPUT_FILENAME_RE, _output_filenames
+from Web.backend.generator import ENTITY_COLORS, _initial_states, create_outputs
 
 
 class WebGeneratorTests(unittest.TestCase):
+    def test_outputs_have_hex_timestamp_suffixes(self):
+        pptx_name, mp4_name = _output_filenames(0x1ABCDEF)
+
+        self.assertEqual(pptx_name, "presentation-1abcdef.pptx")
+        self.assertEqual(mp4_name, "animation-1abcdef.mp4")
+        self.assertRegex(pptx_name, OUTPUT_FILENAME_RE)
+        self.assertRegex(mp4_name, OUTPUT_FILENAME_RE)
+        self.assertIsNone(OUTPUT_FILENAME_RE.fullmatch("../presentation-1abcdef.pptx"))
+
+    def test_jump_prompt_keeps_each_entities_color_and_autostarts(self):
+        actions = parse_prompt("The quick orange fox jumped over the lazy brown dog")
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["trigger"], "msoAnimTriggerAfterPrevious")
+        self.assertEqual(actions[0]["color"], "orange")
+        self.assertEqual(actions[0]["related_entity_data"]["dog"]["color"], "brown")
+        states = _initial_states(actions)
+        self.assertEqual(states["fox"]["color"], ENTITY_COLORS["orange"])
+        self.assertEqual(states["dog"]["color"], ENTITY_COLORS["brown"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            pptx_path = Path(directory) / "presentation.pptx"
+            mp4_path = Path(directory) / "animation.mp4"
+            create_outputs(actions, pptx_path, mp4_path)
+            namespaces = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main"}
+            with ZipFile(pptx_path) as package:
+                slide_xml = ElementTree.fromstring(package.read("ppt/slides/slide1.xml"))
+                images = sorted(
+                    (name for name in package.namelist()
+                     if name.startswith("ppt/media/") and name.endswith(".png")),
+                    key=lambda name: int(name.rsplit("image", 1)[1].split(".", 1)[0]),
+                )
+                picture_colors = []
+                for image_name in images:
+                    image = Image.open(package.open(image_name)).convert("RGBA")
+                    pixel_data = image.tobytes()
+                    picture_colors.append(next(
+                        tuple(pixel_data[offset:offset + 3])
+                        for offset in range(0, len(pixel_data), 4)
+                        if pixel_data[offset + 3] > 0
+                    ))
+            self.assertEqual(
+                picture_colors,
+                [ENTITY_COLORS["orange"], ENTITY_COLORS["brown"]],
+            )
+            effect = slide_xml.find(".//p:cTn[@nodeType='afterEffect']", namespaces)
+            self.assertIsNotNone(effect)
+
     def test_parser_preserves_spin_degrees_and_direction(self):
         actions = parse_prompt("the fox spins 180 degrees counterclockwise")
 

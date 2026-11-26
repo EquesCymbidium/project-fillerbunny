@@ -6,7 +6,7 @@ keyword matching), ready to be handed to the VBA templates later.
 
     >>> parse_prompt("A fox appears, then spins 180 degrees.")
     [{'shape': 'fox', 'effect': 'msoAnimEffectFade',
-      'trigger': 'msoAnimTriggerOnPageClick'},
+      'trigger': 'msoAnimTriggerAfterPrevious'},
      {'shape': 'fox', 'effect': 'msoAnimEffectSpin', 'amount': 180,
       'trigger': 'msoAnimTriggerAfterPrevious'}]
 """
@@ -54,8 +54,8 @@ _PROJECT_ROOT = os.path.normpath(
 )
 _ICON_DIR = os.path.join(_PROJECT_ROOT, "Library", "Icons")
 
-TRIGGER_FIRST = "msoAnimTriggerOnPageClick"
 TRIGGER_NEXT = "msoAnimTriggerAfterPrevious"
+TRIGGER_FIRST = TRIGGER_NEXT
 EFFECT_DURATION = 1.0
 MAX_PROMPT_LENGTH = 2000
 MAX_ACTIONS = 10
@@ -410,6 +410,20 @@ def _extended_parse(prompt: str) -> list:
             else:
                 action["effect"] = "msoAnimEffectBounce"
                 action["repeat_count"] = _event_count(tail)
+
+        related_entities = list(action.get("related_shapes", []))
+        if action.get("destination_entity"):
+            related_entities.append(action["destination_entity"])
+        if related_entities:
+            action["related_entity_data"] = {
+                name: {
+                    key: entity_data[name][key]
+                    for key in ("color", "shape_type", "position")
+                    if key in entity_data[name]
+                }
+                for name in related_entities
+                if name in entity_data
+            }
 
         speed = entity_data[current_actor].get("speed", 1.0)
         for word, factor in _ADVERB_SPEED.items():
