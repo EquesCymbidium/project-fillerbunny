@@ -2,10 +2,12 @@ import io
 import math
 import logging
 import subprocess
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 
 import imageio_ffmpeg
+from lxml import etree
 from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -21,6 +23,10 @@ BACKGROUND = (255, 255, 255)
 ENTITY_SIZE = (116, 84)
 ICON_SIZE = (144, 144)
 ICON_DIR = Path(__file__).resolve().parents[1] / "assets" / "icons"
+ANIMATION_TEMPLATE = Path(__file__).with_name("native_animation_templates.xml")
+P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+P = f"{{{P_NS}}}"
+NS = {"p": P_NS}
 ICON_FILES = {"fox": "Fox.png", "dog": "Dog.png"}
 ENTITY_COLORS = {
     "red": (204, 0, 0),
@@ -194,13 +200,208 @@ def _pptx_color(rgb: tuple[int, int, int]) -> RGBColor:
     return RGBColor(*rgb)
 
 
-def _add_pptx_slide(presentation: Presentation, states: dict, step: int,
-                    total: int, action: dict) -> None:
+def _action_target(action: dict, state: dict, states: dict) -> tuple[float, float]:
+    if action.get("destination") in DESTINATIONS:
+        return DESTINATIONS[action["destination"]]
+    if action.get("destination_entity"):
+        target = states.get(action["destination_entity"])
+        if target is None:
+            raise ValueError(f"Unknown movement target: {action['destination_entity']}")
+        direction = -1 if state["x"] <= target["x"] else 1
+        mover_width = ICON_SIZE[0] if state["has_icon"] else ENTITY_SIZE[0]
+        target_width = ICON_SIZE[0] if target["has_icon"] else ENTITY_SIZE[0]
+        target_x = target["x"] + direction * (
+            target_width / 2 + mover_width / 2 + 12
+        ) / WIDTH
+        return target_x, target["y"]
+    if action.get("motion") == "arc":
+        related_shapes = action.get("related_shapes", [])
+        obstacle = states.get(related_shapes[0]) if related_shapes else None
+        if obstacle is None:
+            raise ValueError("An arc motion requires a related obstacle shape.")
+        direction = 1 if state["x"] <= obstacle["x"] else -1
+        mover_width = ICON_SIZE[0] if state["has_icon"] else ENTITY_SIZE[0]
+        obstacle_width = ICON_SIZE[0] if obstacle["has_icon"] else ENTITY_SIZE[0]
+        target_x = obstacle["x"] + direction * (
+            obstacle_width / 2 + mover_width + 20
+        ) / WIDTH
+        return target_x, state["y"]
+    return state["x"], state["y"]
+
+
+def _arc_height(state: dict, obstacle: dict) -> float:
+    mover_height = ICON_SIZE[1] if state["has_icon"] else ENTITY_SIZE[1]
+    obstacle_height = ICON_SIZE[1] if obstacle["has_icon"] else ENTITY_SIZE[1]
+    return (mover_height / 2 + obstacle_height / 2 + 20) / HEIGHT
+
+
+@lru_cache(maxsize=1)
+def _animation_template() -> etree._Element:
+    try:
+        return etree.fromstring(ANIMATION_TEMPLATE.read_bytes())
+    except (OSError, etree.XMLSyntaxError) as exc:
+        raise RuntimeError(f"Could not load PowerPoint animation templates: {exc}") from exc
+
+
+def _animation_template_wrappers(template: etree._Element) -> list[etree._Element]:
+    path = "./p:tnLst/p:par/p:cTn/p:childTnLst/p:seq/p:cTn/p:childTnLst"
+    sequence = template.find(path, NS)
+    if sequence is None:
+        raise RuntimeError("The PowerPoint animation template has no main sequence.")
+    group = sequence.find("p:par/p:cTn/p:childTnLst", NS)
+    if group is None:
+        raise RuntimeError("The PowerPoint animation template has no action group.")
+    wrappers = group.findall("p:par", NS)
+    if len(wrappers) != 6:
+        raise RuntimeError("The PowerPoint animation template is incomplete.")
+    return wrappers
+
+
+def _animation_template_index(action: dict) -> int:
+    effect = action.get("effect")
+    if effect == "msoAnimEffectFade":
+        return 5 if action.get("exit") else 0
+    if effect == "msoAnimEffectCustom":
+        return 1
+    if effect == "msoAnimEffectSpin":
+        return 2
+    if effect == "msoAnimEffectChangeFillColor":
+        return 3
+    if effect == "msoAnimEffectBounce":
+        return 4
+    raise ValueError(f"Unsupported PowerPoint animation effect: {effect}")
+
+
+def _motion_path(action: dict, state: dict, states: dict) -> str:
+    start_x, start_y = state["x"], state["y"]
+    target_x, target_y = _action_target(action, state, states)
+    delta_x = target_x - start_x
+    delta_y = target_y - start_y
+    if action.get("motion") != "arc":
+        return f"M 0 0 L {delta_x:.3f} {delta_y:.3f}"
+
+    obstacle = states[action["related_shapes"][0]]
+    fraction = (obstacle["x"] - start_x) / delta_x
+    fraction = min(0.95, max(0.05, fraction))
+    control_y = _arc_height(state, obstacle) / (3 * fraction * (1 - fraction))
+    return (
+        f"M 0 0 C {delta_x / 3:.3f} -{control_y:.3f} "
+        f"{delta_x * 2 / 3:.3f} -{control_y:.3f} {delta_x:.3f} {delta_y:.3f}"
+    )
+
+
+def _configure_animation(
+    wrapper: etree._Element,
+    action: dict,
+    shape_id: int,
+    state: dict,
+    states: dict,
+    duration_ms: int,
+    click_trigger: bool,
+    start_delay_ms: int,
+) -> None:
+    outer_timing = wrapper.find("./p:cTn/p:stCondLst/p:cond", NS)
+    if outer_timing is None:
+        raise RuntimeError("An animation template is missing its start condition.")
+
+    effect_timing = wrapper.find(".//p:cTn[@nodeType]", NS)
+    if effect_timing is None:
+        raise RuntimeError("An animation template is missing its effect node.")
+    effect_timing.set("nodeType", "clickEffect" if click_trigger else "afterEffect")
+
+    for node in wrapper.iter():
+        if node.tag == P + "spTgt":
+            node.set("spid", str(shape_id))
+        elif node.tag == P + "cTn":
+            duration = node.get("dur")
+            if duration and duration.isdigit() and int(duration) > 1:
+                node.set("dur", str(max(1, round(int(duration) * duration_ms / 1000))))
+        elif node.tag == P + "cond":
+            delay = node.get("delay")
+            if delay and delay.isdigit() and int(delay) > 0:
+                node.set("delay", str(round(int(delay) * duration_ms / 1000)))
+
+    outer_timing.set("delay", "indefinite" if click_trigger else str(start_delay_ms))
+    effect = action["effect"]
+    if effect == "msoAnimEffectSpin":
+        rotation = wrapper.find(".//p:animRot", NS)
+        if rotation is None:
+            raise RuntimeError("The spin animation template has no rotation effect.")
+        amount = float(action.get("amount", 360))
+        rotation.set("by", str(round(amount * 60000)))
+    elif effect == "msoAnimEffectChangeFillColor":
+        color = wrapper.find(".//{http://schemas.openxmlformats.org/drawingml/2006/main}srgbClr", NS)
+        if color is None:
+            raise RuntimeError("The color animation template has no target color.")
+        rgb = ENTITY_COLORS.get(action.get("to_color"), state["color"])
+        color.set("val", "".join(f"{channel:02X}" for channel in rgb))
+    elif effect == "msoAnimEffectCustom":
+        motion = wrapper.find(".//p:animMotion", NS)
+        if motion is None:
+            raise RuntimeError("The motion animation template has no motion path.")
+        motion.set("path", _motion_path(action, state, states))
+
+
+def _add_native_animations(
+    slide,
+    actions: list[dict],
+    states: dict,
+    shape_ids: dict[str, int],
+) -> None:
+    timing = deepcopy(_animation_template())
+    wrappers = _animation_template_wrappers(timing)
+    sequence_path = "./p:tnLst/p:par/p:cTn/p:childTnLst/p:seq/p:cTn/p:childTnLst"
+    sequence = timing.find(sequence_path, NS)
+    if sequence is None:
+        raise RuntimeError("The PowerPoint animation template has no main sequence.")
+    action_list = sequence.find("p:par/p:cTn/p:childTnLst", NS)
+    if action_list is None:
+        raise RuntimeError("The PowerPoint animation template has no action group.")
+    for child in list(action_list):
+        if child.tag == P + "par":
+            action_list.remove(child)
+
+    elapsed_ms = 0
+    for index, action in enumerate(actions):
+        name = action["shape"]
+        if name not in shape_ids:
+            raise ValueError(f"Animation target was not drawn on the slide: {name}")
+        state = states[name]
+        duration_ms = max(1, round(float(action.get("duration", 0.7)) * 1000))
+        repeat_count = int(action.get("repeat_count", 1))
+        template_index = _animation_template_index(action)
+        wrapper = deepcopy(wrappers[template_index])
+        _configure_animation(
+            wrapper,
+            action,
+            shape_ids[name],
+            state,
+            states,
+            duration_ms,
+            action.get("trigger") == "msoAnimTriggerOnPageClick",
+            elapsed_ms,
+        )
+        effect_timing = wrapper.find(".//p:cTn[@nodeType]", NS)
+        if effect_timing is not None and action.get("effect") == "msoAnimEffectBounce":
+            effect_timing.set("repeatCount", str(repeat_count * 1000))
+        action_list.append(wrapper)
+        elapsed_ms += duration_ms * (repeat_count if action.get("effect") == "msoAnimEffectBounce" else 1)
+
+    for node_id, node in enumerate(timing.iter(P + "cTn"), start=1):
+        node.set("id", str(node_id))
+    build_list = timing.find("p:bldLst", NS)
+    if build_list is not None:
+        timing.remove(build_list)
+    slide._element.append(timing)
+
+
+def _add_pptx_slide(presentation: Presentation, states: dict):
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     background = slide.background.fill
     background.solid()
     background.fore_color.rgb = _pptx_color(BACKGROUND)
 
+    shape_ids = {}
     for name, state in states.items():
         if not state["visible"]:
             continue
@@ -210,7 +411,8 @@ def _add_pptx_slide(presentation: Presentation, states: dict, step: int,
                 width, height = Inches(1.7), Inches(1.7)
                 left = Inches(0.3 + state["x"] * 12.5) - width / 2
                 top = Inches(1.45 + state["y"] * 4.7) - height / 2
-                slide.shapes.add_picture(icon, left, top, width, height)
+                picture = slide.shapes.add_picture(icon, left, top, width, height)
+                shape_ids[name] = picture.shape_id
                 continue
         width, height = Inches(1.7), Inches(1.25)
         left = Inches(0.3 + state["x"] * 12.5) - width / 2
@@ -223,15 +425,17 @@ def _add_pptx_slide(presentation: Presentation, states: dict, step: int,
         shape.fill.fore_color.rgb = _pptx_color(state["color"])
         shape.line.fill.background()
         shape.rotation = state["rotation"]
+        shape_ids[name] = shape.shape_id
         frame = shape.text_frame
         frame.vertical_anchor = MSO_ANCHOR.MIDDLE
         frame.paragraphs[0].alignment = PP_ALIGN.CENTER
         frame.paragraphs[0].text = name.replace("_", " ")
         frame.paragraphs[0].font.size = Pt(16)
         frame.paragraphs[0].font.color.rgb = _pptx_color((255, 255, 255))
+    return slide, shape_ids
 
 
-def _apply_action(state: dict, action: dict) -> None:
+def _apply_action(state: dict, action: dict, states: dict) -> None:
     if action.get("color") in ENTITY_COLORS:
         state["color"] = ENTITY_COLORS[action["color"]]
     if action.get("shape_type"):
@@ -240,10 +444,12 @@ def _apply_action(state: dict, action: dict) -> None:
         state["visible"] = False
     else:
         state["visible"] = True
-    if action.get("destination") in DESTINATIONS:
-        state["x"], state["y"] = DESTINATIONS[action["destination"]]
-    if action.get("destination_entity"):
-        state["x"], state["y"] = 0.5, 0.52
+    if (
+        action.get("destination") in DESTINATIONS
+        or action.get("destination_entity")
+        or action.get("motion") == "arc"
+    ):
+        state["x"], state["y"] = _action_target(action, state, states)
     if action.get("effect") == "msoAnimEffectSpin":
         state["rotation"] = (state["rotation"] + float(action.get("amount", 360))) % 360
     if action.get("effect") == "msoAnimEffectChangeFillColor":
@@ -258,12 +464,13 @@ def create_outputs(actions: list[dict], pptx_path: Path, mp4_path: Path) -> None
     presentation = Presentation()
     presentation.slide_width = Inches(13.333)
     presentation.slide_height = Inches(7.5)
-    width, height = 960, 540
+    slide, shape_ids = _add_pptx_slide(presentation, states)
+    _add_native_animations(slide, actions, states, shape_ids)
 
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     command = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{WIDTH}x{HEIGHT}",
         "-r", str(FPS), "-i", "-", "-an", "-c:v", "libx264",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(mp4_path),
     ]
@@ -278,17 +485,16 @@ def create_outputs(actions: list[dict], pptx_path: Path, mp4_path: Path) -> None
             is_exit = bool(action.get("exit"))
             start_alpha = 0 if action.get("effect") == "msoAnimEffectFade" and not is_exit else 255
             end_alpha = 0 if is_exit else 255
-            target_x, target_y = start_x, start_y
-            if action.get("destination") in DESTINATIONS:
-                target_x, target_y = DESTINATIONS[action["destination"]]
-            elif action.get("destination_entity"):
-                target_x, target_y = 0.5, 0.52
+            target_x, target_y = _action_target(action, state, states)
             rotation_delta = (
                 float(action.get("amount", 360))
                 if action.get("effect") == "msoAnimEffectSpin" else 0
             )
             bounce_count = int(action.get("repeat_count", 1))
             is_bounce = action.get("effect") == "msoAnimEffectBounce"
+            is_arc = action.get("motion") == "arc"
+            obstacle = states[action["related_shapes"][0]] if is_arc else None
+            arc_height = _arc_height(state, obstacle) if obstacle is not None else 0
             frame_count = max(4, min(24, round(float(action.get("duration", 0.7)) * FPS)))
             if is_bounce:
                 frame_count = max(frame_count, min(24, bounce_count * 6))
@@ -300,7 +506,11 @@ def create_outputs(actions: list[dict], pptx_path: Path, mp4_path: Path) -> None
                         "x": start_x + (target_x - start_x) * fraction,
                         "y": (
                             start_y - 0.18 * bounce
-                            if is_bounce else start_y + (target_y - start_y) * fraction
+                            if is_bounce else (
+                                start_y + (target_y - start_y) * fraction
+                                - arc_height * 4 * fraction * (1 - fraction)
+                                if is_arc else start_y + (target_y - start_y) * fraction
+                            )
                         ),
                         "alpha": round(start_alpha + (end_alpha - start_alpha) * fraction),
                         "rotation": start_rotation + rotation_delta * fraction,
@@ -314,8 +524,7 @@ def create_outputs(actions: list[dict], pptx_path: Path, mp4_path: Path) -> None
                 if process.stdin is None:
                     raise RuntimeError("The MP4 encoder input stream closed unexpectedly.")
                 process.stdin.write(image.convert("RGB").tobytes())
-            _apply_action(state, action)
-            _add_pptx_slide(presentation, states, step, len(actions), action)
+            _apply_action(state, action, states)
 
         if process.stdin is not None:
             process.stdin.close()
