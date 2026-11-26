@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -27,6 +28,9 @@ from dispatcher import MAX_ACTIONS, MAX_PROMPT_LENGTH, parse_prompt  # noqa: E40
 
 JOB_ROOT = Path(tempfile.gettempdir()) / "fillerbunny-web-jobs"
 JOB_TTL_SECONDS = 60 * 60
+OUTPUT_FILENAME_RE = re.compile(
+    r"(?:presentation-[0-9a-f]+\.pptx|animation-[0-9a-f]+\.mp4)\Z"
+)
 REQUESTS_PER_MINUTE = 5
 _request_times: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = threading.Lock()
@@ -44,6 +48,11 @@ app.add_middleware(
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(min_length=5, max_length=MAX_PROMPT_LENGTH)
+
+
+def _output_filenames(timestamp_ns: int) -> tuple[str, str]:
+    suffix = f"{timestamp_ns:x}"
+    return f"presentation-{suffix}.pptx", f"animation-{suffix}.mp4"
 
 
 def _check_rate_limit(client_id: str) -> None:
@@ -92,11 +101,12 @@ def generate(request: GenerateRequest, http_request: Request) -> dict:
 
     job_id = str(uuid4())
     job_dir = JOB_ROOT / job_id
+    pptx_filename, mp4_filename = _output_filenames(time.time_ns())
     try:
         _remove_expired_jobs()
         job_dir.mkdir(parents=True)
-        pptx_path = job_dir / "presentation.pptx"
-        mp4_path = job_dir / "animation.mp4"
+        pptx_path = job_dir / pptx_filename
+        mp4_path = job_dir / mp4_filename
         create_outputs(actions, pptx_path, mp4_path)
     except (OSError, RuntimeError, ValueError) as exc:
         if job_dir.exists():
@@ -110,8 +120,8 @@ def generate(request: GenerateRequest, http_request: Request) -> dict:
         "job_id": job_id,
         "actions": len(actions),
         "files": [
-            {"name": "presentation.pptx", "url": f"/api/jobs/{job_id}/presentation.pptx"},
-            {"name": "animation.mp4", "url": f"/api/jobs/{job_id}/animation.mp4"},
+            {"name": pptx_filename, "url": f"/api/jobs/{job_id}/{pptx_filename}"},
+            {"name": mp4_filename, "url": f"/api/jobs/{job_id}/{mp4_filename}"},
         ],
     }
 
@@ -122,7 +132,7 @@ def download(job_id: str, filename: str) -> FileResponse:
         canonical_id = str(UUID(job_id))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Download not found or expired.") from exc
-    if filename not in {"presentation.pptx", "animation.mp4"}:
+    if not OUTPUT_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=404, detail="Download not found or expired.")
 
     path = JOB_ROOT / canonical_id / filename

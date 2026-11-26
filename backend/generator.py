@@ -99,17 +99,24 @@ def _tinted_icon(name: str, color: tuple[int, int, int]) -> io.BytesIO | None:
 def _initial_states(actions: list[dict]) -> dict[str, dict]:
     states = {}
     for action in actions:
-        for name in (action["shape"], *action.get("related_shapes", [])):
+        related_names = list(action.get("related_shapes", []))
+        if action.get("destination_entity"):
+            related_names.append(action["destination_entity"])
+        for name in (action["shape"], *related_names):
             if name in states:
                 continue
+            attributes = (
+                action if name == action["shape"]
+                else action.get("related_entity_data", {}).get(name, {})
+            )
             has_icon = _load_icon(name) is not None
             states[name] = {
                 "color": ENTITY_COLORS.get(
-                    action.get("color"), (0, 0, 0) if has_icon else (59, 130, 246)
+                    attributes.get("color"), (0, 0, 0) if has_icon else (59, 130, 246)
                 ),
-                "shape_type": action.get("shape_type", ""),
+                "shape_type": attributes.get("shape_type", ""),
                 "has_icon": has_icon,
-                "position": action.get("position"),
+                "position": attributes.get("position"),
                 "x": 0.28 + (len(states) % 3) * 0.22,
                 "y": 0.52,
                 "visible": True,
