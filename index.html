@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d1322">
+    <title>Fillerbunny — Prompt to presentation</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="Fillerbunny home">
+          <span class="brand-mark" aria-hidden="true">f.</span>
+          <span>fillerbunny<span class="brand-dot">.</span></span>
+        </a>
+        <span class="topbar-note"><span class="status-dot"></span> PRESENTATION STUDIO</span>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">WORDS IN. VISUALS OUT.</p>
+        <h1>Make a little<br><span>magic happen.</span></h1>
+        <p class="intro">Describe a scene. Get a PowerPoint and a video preview, ready to download.</p>
+      </section>
+
+      <section class="workspace" aria-labelledby="prompt-heading">
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">01 / YOUR IDEA</p>
+            <h2 id="prompt-heading">What should happen?</h2>
+          </div>
+          <span class="counter" id="char-count">0 / 2,000</span>
+        </div>
+        <form id="generator-form">
+          <label class="sr-only" for="prompt">Describe a scene or animation</label>
+          <textarea id="prompt" name="prompt" maxlength="2000" minlength="5" required
+            placeholder="A red fox appears, then spins 180 degrees."></textarea>
+          <div class="form-footer">
+            <span class="hint">Try a shape, color, or action: appear, spin, move, jump, turn.</span>
+            <button id="generate-button" type="submit">
+              <span class="button-label">Create my files</span>
+              <span class="button-arrow" aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </form>
+
+        <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+        <section id="downloads" class="downloads" aria-labelledby="downloads-heading" hidden>
+          <div class="downloads-heading">
+            <div>
+              <p class="eyebrow">02 / READY TO GO</p>
+              <h2 id="downloads-heading">Your files are ready.</h2>
+            </div>
+            <span id="action-count" class="action-count"></span>
+          </div>
+          <div class="file-list">
+            <a id="pptx-download" class="file-card" href="#">
+              <span class="file-icon pptx-icon">P</span>
+              <span class="file-copy"><strong>PowerPoint deck</strong><small>Editable .pptx file</small></span>
+              <span class="download-arrow" aria-hidden="true">↓</span>
+            </a>
+            <a id="mp4-download" class="file-card" href="#">
+              <span class="file-icon mp4-icon">▶</span>
+              <span class="file-copy"><strong>Animation preview</strong><small>Video · .mp4 file</small></span>
+              <span class="download-arrow" aria-hidden="true">↓</span>
+            </a>
+          </div>
+          <p class="expiry-note">The deck is a set of scene snapshots with labeled shapes; the MP4 previews the actions. Native PowerPoint animations and icon artwork are not included. Downloads expire after one hour.</p>
+        </section>
+      </section>
+
+      <details class="connection-settings">
+        <summary>Generator connection</summary>
+        <label for="api-url">Backend service URL</label>
+        <div class="api-row">
+          <input id="api-url" type="url" inputmode="url" placeholder="https://your-service.onrender.com">
+          <button id="save-api" type="button" class="save-button">Save</button>
+        </div>
+        <p>Enter your public API URL once. It is saved only in this browser.</p>
+      </details>
+
+      <footer class="footer">
+        <span>Made for curious minds.</span>
+        <span>FILLERBUNNY / 2026</span>
+      </footer>
+    </main>
+    <script src="app.js" defer></script>
+  </body>
+</html>
