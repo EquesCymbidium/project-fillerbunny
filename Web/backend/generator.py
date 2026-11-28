@@ -125,6 +125,8 @@ def _initial_states(actions: list[dict]) -> dict[str, dict]:
     for name, state in states.items():
         if state["position"] in ("left", "right"):
             state["x"] = 0.18 if state["position"] == "left" else 0.82
+        elif state["position"] in ("offscreen_left", "offscreen_right"):
+            state["x"] = -0.12 if state["position"] == "offscreen_left" else 1.12
     return states
 
 
@@ -200,6 +202,22 @@ def _render_frame(states: dict, step: int, total: int, action: dict,
         rotation = motion["rotation"] if motion else state["rotation"]
         color = motion.get("color") if motion else None
         _draw_entity(image, name, state, x, y, alpha, rotation, color)
+        if motion and motion.get("speech") and alpha > 0:
+            draw = ImageDraw.Draw(image)
+            text = f'"{motion["speech"]}"'
+            box_width = min(WIDTH - 40, max(180, draw.textlength(text, font=_font(18))))
+            box_height = 54
+            box_x = max(10, min(WIDTH - box_width - 10, round(x * WIDTH - box_width / 2)))
+            box_y = max(10, round(y * HEIGHT - 150))
+            draw.rounded_rectangle(
+                (box_x, box_y, box_x + box_width, box_y + box_height),
+                radius=16,
+                fill=(255, 255, 255, 245),
+                outline=(40, 40, 40, 255),
+                width=2,
+            )
+            text_x = box_x + (box_width - draw.textlength(text, font=_font(18))) / 2
+            draw.text((text_x, box_y + 14), text, font=_font(18), fill=(40, 40, 40, 255))
     return image
 
 
@@ -391,6 +409,18 @@ def _add_native_animations(
         effect_timing = wrapper.find(".//p:cTn[@nodeType]", NS)
         if effect_timing is not None and action.get("effect") == "msoAnimEffectBounce":
             effect_timing.set("repeatCount", str(repeat_count * 1000))
+        if action.get("speech"):
+            speech = slide.shapes.add_textbox(
+                Inches(0.3 + state["x"] * 12.5 - 1.2),
+                Inches(1.45 + state["y"] * 4.7 - 1.2),
+                Inches(2.4),
+                Inches(0.8),
+            )
+            paragraph = speech.text_frame.paragraphs[0]
+            paragraph.text = f'"{action["speech"]}"'
+            paragraph.alignment = PP_ALIGN.CENTER
+            paragraph.font.size = Pt(18)
+            paragraph.font.color.rgb = _pptx_color((40, 40, 40))
         action_list.append(wrapper)
         elapsed_ms += duration_ms * (repeat_count if action.get("effect") == "msoAnimEffectBounce" else 1)
 
@@ -525,6 +555,7 @@ def create_outputs(actions: list[dict], pptx_path: Path, mp4_path: Path) -> None
                             round(start + (end - start) * fraction)
                             for start, end in zip(state["color"], target_color)
                         ),
+                        "speech": action.get("speech"),
                     }
                 }
                 image = _render_frame(states, step, len(actions), action, active)

@@ -94,6 +94,31 @@ class WebGeneratorTests(unittest.TestCase):
         self.assertIsNotNone(rotation)
         self.assertEqual(rotation.attrib["by"], "-10800000")
 
+    def test_complex_dash_leap_dash_sequence_is_preserved(self):
+        actions = parse_prompt(
+            "the quick orange fox dashes in from the left screen, and leaps over "
+            "the brown dog, and dashes off the right screen."
+        )
+
+        self.assertEqual(len(actions), 3)
+        self.assertEqual([action["shape"] for action in actions], ["fox", "fox", "fox"])
+        self.assertEqual(actions[0]["position"], "offscreen_left")
+        self.assertEqual(actions[0]["destination"], "left")
+        self.assertEqual(actions[1]["motion"], "arc")
+        self.assertEqual(actions[2]["destination"], "offscreen_right")
+        self.assertEqual(actions[0]["duration"], 0.5)
+
+    def test_bark_preserves_quoted_speech_and_subject(self):
+        actions = parse_prompt(
+            'the brown dog barks: "what?!", then the fox appears'
+        )
+
+        bark = actions[0]
+        self.assertEqual(bark["shape"], "dog")
+        self.assertEqual(bark["effect"], "msoAnimEffectBounce")
+        self.assertEqual(bark["speech"], "what?!")
+        self.assertEqual(actions[1]["shape"], "fox")
+
     def test_parser_supports_common_entities_without_icon_artwork(self):
         dispatcher._icon_entity_names.cache_clear()
         try:

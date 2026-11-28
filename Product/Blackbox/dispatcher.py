@@ -134,11 +134,16 @@ _VERB_FORMS = {
              "twirl", "twirls", "twirled", "twirling"),
     "move": ("move", "moves", "moved", "moving",
              "run", "runs", "ran", "running",
-             "walk", "walks", "walked", "walking"),
+             "walk", "walks", "walked", "walking",
+             "dash", "dashes", "dashed", "dashing"),
     "jump": ("jump", "jumps", "jumped", "jumping",
              "leap", "leaps", "leaped", "leaping",
              "hop", "hops", "hopped", "hopping"),
     "turn": ("turn", "turns", "turned", "turning"),
+    "speak": ("bark", "barks", "barked", "barking",
+              "say", "says", "said", "saying",
+              "speak", "speaks", "spoke", "speaking",
+              "cry", "cries", "cried", "crying"),
 }
 _ACTION_RE = re.compile(
     r"\b(" + "|".join(
@@ -266,13 +271,15 @@ def _position_for_mention(prompt: str, mention: dict, next_mention: dict | None)
     end = next_mention["start"] if next_mention else len(prompt)
     context = prompt[mention["end"]:end]
     match = re.search(
-        r"\bon\s+the\s+(left|right)\b|\b(left|right)\s+side\b",
+        r"\bon\s+the\s+(left|right)\b|\b(left|right)\s+side\b"
+        r"|\bfrom\s+(?:the\s+)?(left|right)\b"
+        r"|\b(?:the\s+)?(left|right)\s+screen\b",
         context,
         re.IGNORECASE,
     )
     if not match:
         return None
-    return (match.group(1) or match.group(2)).lower()
+    return (match.group(1) or match.group(2) or match.group(3) or match.group(4)).lower()
 
 
 def _movement_target(text: str, event_end: int, tail_end: int, mentions: list) -> str | None:
@@ -284,6 +291,13 @@ def _movement_target(text: str, event_end: int, tail_end: int, mentions: list) -
         if re.search(r"\b(?:to|toward|towards)\s+(?:(?:the|a|an)\s+)?$", prefix, re.IGNORECASE):
             return mention["name"]
     return None
+
+
+def _current_clause(prompt: str, start: int, end: int) -> str:
+    """Get the text of the current clause before a mention."""
+    separators = list(re.finditer(r"[,.!?;]|\band\b", prompt[start:end], re.IGNORECASE))
+    clause_start = start + (separators[-1].end() if separators else 0)
+    return prompt[clause_start:end]
 
 
 def _extended_parse(prompt: str) -> list:
@@ -337,8 +351,8 @@ def _extended_parse(prompt: str) -> list:
         subjects = [
             mention for mention in between
             if not re.search(
-                r"\b(over|above|past|around|to|toward|towards|with|for|by|near)\s+$",
-                prompt[max(previous_event_end, mention["start"] - 16):mention["start"]],
+                r"\b(over|above|past|around|to|toward|towards|with|for|by|near)\b",
+                _current_clause(prompt, previous_event_end, mention["start"]),
                 re.IGNORECASE,
             )
         ]
@@ -394,6 +408,25 @@ def _extended_parse(prompt: str) -> list:
                 action["destination_entity"] = target
             else:
                 action["motion"] = _movement_destination(tail)
+                if re.search(r"\b(?:in|entering)\b", tail, re.IGNORECASE):
+                    if re.search(r"\bfrom\s+(?:the\s+)?left\b|\bleft\s+screen\b",
+                                 tail, re.IGNORECASE):
+                        action["position"] = "offscreen_left"
+                        action["motion"] = "left"
+                    elif re.search(r"\bfrom\s+(?:the\s+)?right\b|\bright\s+screen\b",
+                                   tail, re.IGNORECASE):
+                        action["position"] = "offscreen_right"
+                        action["motion"] = "right"
+        elif kind == "speak":
+            action["effect"] = "msoAnimEffectBounce"
+            action["repeat_count"] = 1
+            quoted = re.search(r"[\"“](.+?)[\"”]", tail)
+            if quoted:
+                action["speech"] = quoted.group(1).strip()
+            else:
+                colon_text = re.search(r":\s*(.+)$", tail)
+                if colon_text:
+                    action["speech"] = colon_text.group(1).strip(" \t.!?")
         else:
             over_match = re.search(r"\bover\b", tail, re.IGNORECASE)
             obstacle = None
